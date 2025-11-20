@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # MinIO - S3-compatible object storage
+  minio:
+    image: minio/minio
+    container_name: blockchain-datalake-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - datalake-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Trino - Distributed SQL query engine
+  trino:
+    image: trinodb/trino:latest
+    container_name: blockchain-datalake-trino
+    ports:
+      - "8080:8080"
+    environment:
+      - TRINO_ENVIRONMENT=development
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog
+    networks:
+      - datalake-network
+    depends_on:
+      - minio
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # PostgreSQL for Hive Metastore
+  postgres:
+    image: postgres:14
+    container_name: blockchain-datalake-postgres
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: metastore
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - datalake-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Hive Metastore (for Trino)
+  hive-metastore:
+    image: apache/hive:3.1.3
+    container_name: blockchain-datalake-hive-metastore
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      METASTORE_DB_HOSTNAME: postgres
+    ports:
+      - "9083:9083"
+    networks:
+      - datalake-network
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+networks:
+  datalake-network:
+    driver: bridge
+
+volumes:
+  minio_data:
+    driver: local
+  postgres_data:
+    driver: local

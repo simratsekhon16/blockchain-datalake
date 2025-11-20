@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blockchain Data Lake Governance</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 Blockchain Data Lake Governance System</h1>
+            <div id="account-info">
+                <span id="account-address">Not Connected</span>
+                <button id="connect-wallet" class="btn btn-primary">Connect MetaMask</button>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="datasets">Datasets</button>
+            <button class="tab-btn" data-tab="proposals">Proposals</button>
+            <button class="tab-btn" data-tab="create-dataset">Create Dataset</button>
+            <button class="tab-btn" data-tab="create-proposal">Create Proposal</button>
+            <button class="tab-btn" data-tab="logs">Event Logs</button>
+        </nav>
+
+        <main>
+            <!-- Datasets Tab -->
+            <section id="tab-datasets" class="tab-content active">
+                <h2>Available Datasets</h2>
+                <div id="datasets-list">
+                    <p class="loading">Loading datasets...</p>
+                </div>
+            </section>
+
+            <!-- Proposals Tab -->
+            <section id="tab-proposals" class="tab-content">
+                <h2>Proposals</h2>
+                <div class="filter-bar">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="pending">Pending</button>
+                    <button class="filter-btn" data-filter="executed">Executed</button>
+                    <button class="filter-btn" data-filter="rejected">Rejected</button>
+                </div>
+                <div id="proposals-list">
+                    <p class="loading">Loading proposals...</p>
+                </div>
+            </section>
+
+            <!-- Create Dataset Tab -->
+            <section id="tab-create-dataset" class="tab-content">
+                <h2>Create New Dataset</h2>
+                <div class="form-card">
+                    <form id="create-dataset-form">
+                        <div class="form-group">
+                            <label for="dataset-name">Dataset Name *</label>
+                            <input type="text" id="dataset-name" required placeholder="e.g., Customer Transactions">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="initial-owners">Initial Owners (comma-separated addresses) *</label>
+                            <textarea id="initial-owners" required rows="3" placeholder="0x123..., 0x456..."></textarea>
+                            <small>Enter Ethereum addresses separated by commas</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Schema Definition</label>
+                            <div id="schema-builder">
+                                <div class="schema-column">
+                                    <input type="text" placeholder="Column Name" class="col-name">
+                                    <select class="col-type">
+                                        <option value="STRING">STRING</option>
+                                        <option value="INT">INT</option>
+                                        <option value="BIGINT">BIGINT</option>
+                                        <option value="DOUBLE">DOUBLE</option>
+                                        <option value="BOOLEAN">BOOLEAN</option>
+                                        <option value="DATE">DATE</option>
+                                        <option value="TIMESTAMP">TIMESTAMP</option>
+                                    </select>
+                                    <button type="button" class="btn-remove-col">×</button>
+                                </div>
+                            </div>
+                            <button type="button" id="add-column" class="btn btn-secondary">+ Add Column</button>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">Create Dataset (Admin Only)</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Create Proposal Tab -->
+            <section id="tab-create-proposal" class="tab-content">
+                <h2>Create Proposal</h2>
+                
+                <div class="form-card">
+                    <div class="form-group">
+                        <label for="proposal-type">Proposal Type *</label>
+                        <select id="proposal-type">
+                            <option value="">-- Select Type --</option>
+                            <option value="0">Onboard Owner</option>
+                            <option value="1">Revoke Owner</option>
+                            <option value="2">Ingestion Request</option>
+                            <option value="3">Column/Row Access Request</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="proposal-dataset">Dataset *</label>
+                        <select id="proposal-dataset">
+                            <option value="">-- Select Dataset --</option>
+                        </select>
+                    </div>
+
+                    <!-- Onboard/Revoke Owner Form -->
+                    <div id="owner-proposal-form" class="conditional-form" style="display: none;">
+                        <div class="form-group">
+                            <label for="target-address">Target Address *</label>
+                            <input type="text" id="target-address" placeholder="0x...">
+                        </div>
+                    </div>
+
+                    <!-- Ingestion Request Form -->
+                    <div id="ingestion-proposal-form" class="conditional-form" style="display: none;">
+                        <div class="form-group">
+                            <label for="filename">Filename *</label>
+                            <input type="text" id="filename" placeholder="transactions_2024.parquet">
+                        </div>
+                        <div class="form-group">
+                            <label for="file-format">File Format *</label>
+                            <select id="file-format">
+                                <option value="parquet">Parquet</option>
+                                <option value="csv">CSV</option>
+                                <option value="json">JSON</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="ingestion-purpose">Purpose *</label>
+                            <textarea id="ingestion-purpose" rows="3" required></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Access Request Form -->
+                    <div id="access-proposal-form" class="conditional-form" style="display: none;">
+                        <div class="form-group">
+                            <label for="requester-address">Requester Address *</label>
+                            <input type="text" id="requester-address" placeholder="0x...">
+                        </div>
+                        <div class="form-group">
+                            <label>Select Columns *</label>
+                            <div id="column-selector">
+                                <p class="info">Select a dataset first</p>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Row Filters</label>
+                            <div id="filter-builder">
+                                <button type="button" id="add-filter" class="btn btn-secondary">+ Add Filter</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="result-limit">Result Limit *</label>
+                            <input type="number" id="result-limit" value="10000" min="1" max="1000000">
+                        </div>
+                        <div class="form-group">
+                            <label for="access-purpose">Purpose *</label>
+                            <textarea id="access-purpose" rows="3" required></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="justification">Justification *</label>
+                            <textarea id="justification" rows="3" required></textarea>
+                        </div>
+                    </div>
+
+                    <button id="submit-proposal" class="btn btn-primary">Submit Proposal</button>
+                </div>
+            </section>
+
+            <!-- Event Logs Tab -->
+            <section id="tab-logs" class="tab-content">
+                <h2>Event Logs</h2>
+                <div class="controls">
+                    <button id="clear-logs" class="btn btn-secondary">Clear Logs</button>
+                    <button id="refresh-logs" class="btn btn-secondary">Refresh</button>
+                </div>
+                <div id="event-logs">
+                    <p class="info">No events logged yet</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal for Dataset Details -->
+    <div id="dataset-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2 id="modal-dataset-name">Dataset Details</h2>
+            <div id="modal-dataset-details"></div>
+        </div>
+    </div>
+
+    <!-- Modal for Proposal Details -->
+    <div id="proposal-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Proposal Details</h2>
+            <div id="modal-proposal-details"></div>
+            <div id="modal-voting-section"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
