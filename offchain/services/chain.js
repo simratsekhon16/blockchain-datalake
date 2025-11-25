@@ -13,7 +13,7 @@ let provider;
 async function setupEventListeners() {
   // Load contract ABI and address
   const contractData = JSON.parse(
-    fs.readFileSync(path.join(__dirname, 'abi', 'DataLakeAccess.json'), 'utf8')
+    fs.readFileSync(path.join(__dirname, '..', 'abi', 'DataLakeAccess.json'), 'utf8')
   );
 
   // Connect to Hardhat local network

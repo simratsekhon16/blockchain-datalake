@@ -1,7 +1,8 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
-/** @type import('hardhat/config').HardhatUserConfig */
+const SEED_PHRASE = process.env.SEED_PHRASE || "";
+
 module.exports = {
   solidity: {
     version: "0.8.20",
@@ -14,11 +15,17 @@ module.exports = {
   },
   networks: {
     hardhat: {
-      chainId: 31337
+      chainId: 1337,
+      accounts: {
+        mnemonic: SEED_PHRASE
+      }
     },
     localhost: {
       url: "http://127.0.0.1:8545",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
+      accounts: {
+        mnemonic: SEED_PHRASE
+      },
+      chainId: 1337
     }
   },
   paths: {
