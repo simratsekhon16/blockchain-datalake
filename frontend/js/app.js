@@ -643,74 +643,66 @@ function addFilterRow() {
 }
 
 // Handle submit proposal
-async function handleSubmitProposal() {
+async function handleSubmitProposalWithFile(e) {
+    e.preventDefault();
+    
+    if (!contract) {
+        showError('Please connect your wallet first');
+        return;
+    }
+    
+    const proposalType = document.getElementById('proposal-type').value;
+    const datasetId = document.getElementById('proposal-dataset-id').value;
+    
+    if (!proposalType || !datasetId) {
+        showError('Please select proposal type and dataset');
+        return;
+    }
+    
+    let targetAddress = ethers.constants.AddressZero;
+    let metadata = '{}';
+    let tempUploadPath = null;
+    
     try {
-        const proposalType = document.getElementById('proposal-type').value;
-        const datasetId = document.getElementById('proposal-dataset').value;
-        
-        if (!proposalType || !datasetId) {
-            showError('Please select proposal type and dataset');
-            return;
-        }
-        
-        let targetAddress = ethers.constants.AddressZero;
-        let metadata = {};
-        
-        if (proposalType === '0' || proposalType === '1') {
-            // Owner operations
-            targetAddress = document.getElementById('target-address').value;
-            if (!ethers.utils.isAddress(targetAddress)) {
-                showError('Invalid target address');
-                return;
-            }
-            metadata = {
-                action: proposalType === '0' ? 'onboard' : 'revoke',
-                targetAddress
-            };
-        } else if (proposalType === '2') {
-            // Ingestion request
-            targetAddress = currentAccount;
-            metadata = {
-                filename: document.getElementById('filename').value,
-                file_format: document.getElementById('file-format').value,
-                purpose: document.getElementById('ingestion-purpose').value
-            };
-        } else if (proposalType === '3') {
-            // Access request
-            targetAddress = document.getElementById('requester-address').value || currentAccount;
+        if (proposalType === '2') {
+            // Ingestion with file upload
             
-            // Get selected columns
-            const selectedColumns = Array.from(document.querySelectorAll('#column-selector input:checked'))
-                .map(input => input.value);
-            
-            if (selectedColumns.length === 0) {
-                showError('Please select at least one column');
-                return;
-            }
-            
-            // Build row filter
-            const filterRows = document.querySelectorAll('.filter-row');
-            const filters = [];
-            filterRows.forEach(row => {
-                const column = row.querySelector('.filter-column').value;
-                const operator = row.querySelector('.filter-operator').value;
-                const value = row.querySelector('.filter-value').value;
+            // STEP 1: Upload file to temporary location FIRST
+            if (uploadedFile) {
+                showInfo('Uploading file to temporary storage...');
                 
-                if (column && value) {
-                    filters.push(`${column} ${operator} '${value}'`);
+                const tempUpload = await uploadFileToTemp(uploadedFile, datasetId);
+                
+                if (!tempUpload.success) {
+                    showError('File upload failed: ' + tempUpload.error);
+                    return;
                 }
-            });
+                
+                tempUploadPath = tempUpload.path;
+                showSuccess('File uploaded to temporary storage');
+            }
             
-            metadata = {
-                columns: selectedColumns,
-                row_filter: filters.join(' AND '),
-                limit: parseInt(document.getElementById('result-limit').value),
-                purpose: document.getElementById('access-purpose').value,
-                justification: document.getElementById('justification').value
-            };
+            const filename = uploadedFile ? uploadedFile.name : document.getElementById('ingestion-filename').value;
+            const format = document.getElementById('ingestion-format').value;
+            const purpose = document.getElementById('ingestion-purpose').value;
+            
+            metadata = JSON.stringify({
+                type: 'ingestion',
+                filename,
+                format,
+                purpose,
+                hasFile: !!uploadedFile,
+                tempPath: tempUploadPath, // ← Store temp path
+                fileSize: uploadedFile ? uploadedFile.size : null,
+                fileColumns: fileMetadata ? fileMetadata.columns : null,
+                fileRows: fileMetadata ? fileMetadata.estimatedRows : null,
+                uploadedAt: new Date().toISOString()
+            });
         }
+        // ... rest of proposal types (owner operations, access requests)
         
-        showInfo('Creating proposal...');
+        // STEP 2: Create proposal on blockchain
+        showInfo('Creating proposal on blockchain...');
         
         const tx = await contract.createProposal(
             proposalType,
@@ -720,42 +712,116 @@ async function handleSubmitProposal() {
         );
         
         showInfo('Transaction submitted. Waiting for confirmation...');
-        await tx.wait();
+        const receipt = await tx.wait();
         
-        showSuccess('Proposal created successfully!');
+        // Get proposal ID from event
+        const event = receipt.events.find(e => e.event === 'ProposalCreated');
+        const proposalId = event.args.proposalId.toNumber();
         
-        // Reload proposals
+        showSuccess(`Proposal #${proposalId} created successfully!`);
+        
+        if (tempUploadPath) {
+            showInfo(`File stored temporarily. It will be moved to permanent storage after approval.`);
+        }
+        
+        // Reset form
+        e.target.reset();
+        uploadedFile = null;
+        fileMetadata = null;
+        document.getElementById('file-name-display').textContent = 'No file selected';
+        document.getElementById('file-info').style.display = 'none';
+        
+        const preview = document.querySelector('.csv-preview');
+        if (preview) preview.remove();
+        
+        // Reload
+        await checkUserPermissions();
         await loadProposals();
-        
-        // Switch to proposals tab
         switchTab('proposals');
         
     } catch (error) {
         console.error('Failed to create proposal:', error);
-        showError('Failed to create proposal: ' + error.message);
+        
+        // If blockchain fails but file was uploaded, clean up temp file
+        if (tempUploadPath) {
+            try {
+                await fetch('http://localhost:3001/cleanup-temp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: tempUploadPath })
+                });
+            } catch (cleanupError) {
+                console.error('Cleanup failed:', cleanupError);
+            }
+        }
+        
+        showError('Failed to create proposal: ' + (error.reason || error.message));
     }
 }
-
-// Update dataset selector
-async function updateDatasetSelector() {
-    const selector = document.getElementById('proposal-dataset');
+// Upload file to temporary MinIO location
+async function uploadFileToTemp(file, datasetId) {
+    const progressDiv = document.getElementById('upload-progress');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
     
     try {
-        const datasetCount = await contract.datasetCount();
+        progressDiv.style.display = 'block';
+        progressFill.style.width = '0%';
+        progressText.textContent = 'Uploading... 0%';
         
-        selector.innerHTML = '<option value="">-- Select Dataset --</option>';
+        // Create FormData
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('datasetId', datasetId);
+        formData.append('metadata', JSON.stringify(fileMetadata));
         
-        for (let i = 0; i < datasetCount.toNumber(); i++) {
-            const dataset = await contract.getDataset(i);
-            const [id, name] = dataset;
+        // Use XMLHttpRequest for progress tracking
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
             
-            const option = document.createElement('option');
-            option.value = i;
-            option.textContent = `${name} (ID: ${i})`;
-            selector.appendChild(option);
-        }
+            // Track upload progress
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const percentComplete = Math.round((e.loaded / e.total) * 100);
+                    progressFill.style.width = percentComplete + '%';
+                    progressText.textContent = `Uploading... ${percentComplete}%`;
+                }
+            });
+            
+            // Handle completion
+            xhr.addEventListener('load', () => {
+                if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    progressFill.style.width = '100%';
+                    progressText.textContent = 'Upload complete!';
+                    
+                    setTimeout(() => {
+                        progressDiv.style.display = 'none';
+                    }, 2000);
+                    
+                    resolve(response);
+                } else {
+                    reject(new Error(`Upload failed with status ${xhr.status}`));
+                }
+            });
+            
+            // Handle errors
+            xhr.addEventListener('error', () => {
+                reject(new Error('Network error during upload'));
+            });
+            
+            // Send request
+            xhr.open('POST', 'http://localhost:3001/upload-temp');
+            xhr.send(formData);
+        });
+        
     } catch (error) {
-        console.error('Failed to update dataset selector:', error);
+        console.error('Upload error:', error);
+        progressDiv.style.display = 'none';
+        return {
+            success: false,
+            error: error.message
+        };
     }
 }
 

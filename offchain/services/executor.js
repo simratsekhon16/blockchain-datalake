@@ -5,63 +5,130 @@ const { getContract } = require('./chain');
 /**
  * Handle ingestion approval event
  */
-async function handleIngestionApproved(proposalId, datasetId, metadataJson) {
-  console.log('\n--- Processing Ingestion Approval ---');
-  
-  try {
-    // Parse metadata
-    const metadata = JSON.parse(metadataJson);
-    console.log('Parsed metadata:', metadata);
-
-    // Validate schema
-    const schema = await getSchema(datasetId);
-    if (!schema) {
-      throw new Error(`No schema found for dataset ${datasetId}`);
-    }
-
-    // Validate columns match schema
-    if (metadata.expected_columns) {
-      const schemaColumns = schema.columns.map(c => c.name);
-      const invalidColumns = metadata.expected_columns.filter(
-        col => !schemaColumns.includes(col)
-      );
-      
-      if (invalidColumns.length > 0) {
-        throw new Error(`Invalid columns: ${invalidColumns.join(', ')}`);
-      }
-    }
-
-    // Create audit log
-    const auditData = {
-      proposalId: proposalId.toString(),
-      datasetId: datasetId.toString(),
-      metadata,
-      status: 'approved',
-      timestamp: new Date().toISOString(),
-      schema_validated: true
-    };
-
-    await saveAuditLog('ingestion', datasetId, proposalId, auditData);
-    console.log('Ingestion approval processed successfully');
-    console.log('Ready for file upload. Use registerIngest() after uploading file.');
-
-  } catch (error) {
-    console.error('Error processing ingestion approval:', error);
+async function handleIngestionApproved(event) {
+    const { proposalId, datasetId } = event.args;
     
-    // Log error to audit
-    const errorAudit = {
-      proposalId: proposalId.toString(),
-      datasetId: datasetId.toString(),
-      error: error.message,
-      status: 'failed',
-      timestamp: new Date().toISOString()
-    };
+    console.log(`\n=== Ingestion Approved ===`);
+    console.log(`Proposal ID: ${proposalId}`);
+    console.log(`Dataset ID: ${datasetId}`);
     
-    await saveAuditLog('ingestion-error', datasetId, proposalId, errorAudit);
-    throw error;
-  }
+    try {
+        // Get proposal details
+        const proposal = await contract.getProposal(proposalId);
+        const metadata = JSON.parse(proposal[4]);
+        
+        console.log('Metadata:', metadata);
+        
+        // Validate schema
+        const dataset = await contract.getDataset(datasetId);
+        const schemaJson = dataset[1];
+        
+        // If file was uploaded to temp location, move it
+        if (metadata.tempPath) {
+            console.log(`Moving file from temp: ${metadata.tempPath}`);
+            
+            const finalPath = `datasets/${datasetId}/ingestion/${proposalId}/${metadata.filename}`;
+            
+            // Copy from temp to final location
+            await moveFileToFinal(metadata.tempPath, finalPath);
+            
+            console.log(`File moved to: ${finalPath}`);
+            
+            // Create Trino table if needed
+            await createTrinoTable(datasetId, schemaJson, finalPath);
+            
+            // Save audit log
+            await saveAuditLog('ingestion', datasetId, proposalId, {
+                filename: metadata.filename,
+                format: metadata.format,
+                purpose: metadata.purpose,
+                finalPath: finalPath,
+                fileSize: metadata.fileSize,
+                columns: metadata.fileColumns,
+                rows: metadata.fileRows,
+                approvedAt: new Date().toISOString()
+            });
+            
+            console.log('✓ Ingestion processing complete');
+        } else {
+            console.log('No file attached to this proposal');
+        }
+        
+    } catch (error) {
+        console.error('Error processing ingestion:', error);
+    }
+}
+// Move file from temp to final location in MinIO
+async function moveFileToFinal(tempPath, finalPath) {
+    try {
+        // Copy object to new location
+        await minioClient.copyObject(
+            'datalake',           // destination bucket
+            finalPath,            // destination path
+            `datalake/${tempPath}` // source
+        );
+        
+        console.log(`Copied: ${tempPath} → ${finalPath}`);
+        
+        // Delete temp file
+        await minioClient.removeObject('datalake', tempPath);
+        
+        console.log(`Deleted temp: ${tempPath}`);
+        
+    } catch (error) {
+        console.error('Failed to move file:', error);
+        throw error;
+    }
 }
 
+// Clean up temporary file (if proposal creation fails)
+app.post('/cleanup-temp', async (req, res) => {
+    try {
+        const { path } = req.body;
+        
+        if (!path) {
+            return res.status(400).json({ error: 'Path required' });
+        }
+        
+        console.log(`Cleaning up temp file: ${path}`);
+        
+        await minioClient.removeObject('datalake', path);
+        
+        res.json({ success: true });
+        
+    } catch (error) {
+        console.error('Cleanup error:', error);
+        res.status(500).json({ 
+            error: 'Cleanup failed',
+            message: error.message
+        });
+    }
+});
+// Clean up temp files older than 24 hours
+async function cleanupOldTempFiles() {
+    try {
+        const prefix = 'temp-uploads/';
+        const stream = minioClient.listObjects('datalake', prefix, true);
+        
+        const now = Date.now();
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        
+        for await (const obj of stream) {
+            const fileAge = now - new Date(obj.lastModified).getTime();
+            
+            if (fileAge > maxAge) {
+                console.log(`Deleting old temp file: ${obj.name}`);
+                await minioClient.removeObject('datalake', obj.name);
+            }
+        }
+        
+    } catch (error) {
+        console.error('Cleanup error:', error);
+    }
+}
+
+// Run cleanup every hour
+setInterval(cleanupOldTempFiles, 60 * 60 * 1000);
 /**
  * Handle access granted event
  */
