@@ -287,7 +287,7 @@ function createProposalCard(id, proposal) {
     const card = document.createElement('div');
     card.className = 'card';
     card.dataset.proposalId = id;
-    card.dataset.state = proposal[6]; // state
+    card.dataset.state = proposal[6];
     
     const proposalTypes = ['Onboard Owner', 'Revoke Owner', 'Ingest Request', 'Access Request'];
     const stateLabels = ['pending', 'executed', 'rejected'];
@@ -295,19 +295,46 @@ function createProposalCard(id, proposal) {
     
     const [proposalId, proposalType, datasetId, targetAddress, metadata, proposer, state, adminVotes, ownerVotes, createdAt] = proposal;
     
+    const isOwnProposal = proposer.toLowerCase() === currentAccount.toLowerCase();
+    const canVote = canVoteOnProposal(id, proposal);
+    const datasetIdNum = datasetId.toNumber();
+    const showProposer = userRole.isAdmin || userRole.ownedDatasets.includes(datasetIdNum);
+    
+    // Build proposer row HTML separately to avoid nesting issues
+    let proposerRowHTML = '';
+    if (showProposer) {
+        proposerRowHTML = `
+            <div class="info-row">
+                <span class="info-label">Proposer:</span>
+                <span class="info-value">${proposer.substring(0, 10)}...${proposer.substring(38)}</span>
+            </div>
+        `;
+    }
+    
+    // Build badge HTML separately
+    let ownProposalBadge = '';
+    if (isOwnProposal) {
+        ownProposalBadge = '<span class="badge badge-info" style="margin-left: 10px;">Your Proposal</span>';
+    }
+    
+    // Build vote button HTML separately
+    let voteButtonHTML = '';
+    if (state === 0 && canVote) {
+        voteButtonHTML = `<button class="btn btn-success" onclick="voteOnProposal(${id})">Vote</button>`;
+    }
+    
+    // Now build the card with simple concatenation
     card.innerHTML = `
         <div class="card-header">
             <div>
                 <div class="card-title">Proposal #${id}: ${proposalTypes[proposalType]}</div>
                 <small>Dataset ID: ${datasetId.toString()}</small>
+                ${ownProposalBadge}
             </div>
             <span class="badge ${stateBadges[state]}">${stateLabels[state]}</span>
         </div>
         <div class="card-body">
-            <div class="info-row">
-                <span class="info-label">Proposer:</span>
-                <span class="info-value">${proposer.substring(0, 10)}...${proposer.substring(38)}</span>
-            </div>
+            ${proposerRowHTML}
             <div class="info-row">
                 <span class="info-label">Admin Votes:</span>
                 <span class="info-value">${adminVotes.toString()}</span>
@@ -322,14 +349,13 @@ function createProposalCard(id, proposal) {
             </div>
             <div style="margin-top: 15px;">
                 <button class="btn btn-secondary" onclick="viewProposal(${id})">View Details</button>
-                ${state === 0 ? `<button class="btn btn-success" onclick="voteOnProposal(${id})">Vote</button>` : ''}
+                ${voteButtonHTML}
             </div>
         </div>
     `;
     
     return card;
 }
-
 // View proposal details
 async function viewProposal(proposalId) {
     const modal = document.getElementById('proposal-modal');
